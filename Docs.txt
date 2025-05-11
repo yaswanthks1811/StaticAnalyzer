@@ -1,0 +1,58 @@
+Static Analysis:
+
+General :(Using Java)
+
+	By Checking the MZ and PE header and by MessageDigest Class for Finding the HashValuess
+	
+Static PE Info:(Using Java)
+
+	Locating Coff Header in which Timstamp and File Type(PE32/PE32+).(COFF Header offset = PE Header offset + 4 bytes ("PE\0\0" signature))
+	Locating Optional Header for Entry Point Address,Images Base Address ,Subsystem type,
+	dll Characteristics,Data directories.
+	
+Authenticode Signature:(Using Java + BouncyCastle Dependency)
+
+	Locating the Signature Table in the PE File ,then Extract Certificate Chain and check Validity 
+	and other details using BountyCastle.
+
+EntryPoint Preview :(Using Java /Using Objdump Command in Terminal):
+
+	Approach 1:Locating the Address of Entry Point in the Optional Header and find the offset of the Entry Point,
+	then by using Switch Case to map the Instructions with respective Opcodes.
+	
+	Approach 2:Using Objdump -d <filename.exe> command and fetch required Instructions based on preview Length.
+
+Data Directories :(Using Java)
+
+	Locating IMAGE_DATA_DIRECTORY in Optional Header and fetching Virtual Address and Size of Directories 
+	
+Sections Parsing:(Using Java)
+
+	Reads PE headers to extract all section details (name, sizes, addresses, characteristics).
+	Calculates MD5 hashes and entropy for each section.
+	Identifies section types (code, data, resources, etc.) and permissions (executable/writable).
+	
+Imports Parsing:(Using Java)
+	
+	Finds import directory via Optional Header data directories.
+	Processes each import descriptor to extract DLL names.
+	
+Exports Parsing:(Using Java)
+	
+	Finds Export directory via Optional Header data directories.
+	Processes each Export descriptor to extract DLL names.
+	
+Artifacts Parsing :(Using Java)
+
+	Fetch the Printable Ascii from the executable and Using Regex to Match with urls,IP Addresses and email Addresses.
+	
+
+
+
+	
+
+	
+		
+	
+	
+	
