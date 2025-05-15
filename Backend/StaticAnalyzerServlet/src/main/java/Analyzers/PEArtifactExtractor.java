@@ -1,5 +1,7 @@
 package Analyzers;
 
+import Bean.PEArtifacts;
+
 import java.io.IOException;
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
@@ -34,13 +36,106 @@ public class PEArtifactExtractor implements Serializable {
                     "OriginalFilename|ProductName|ProductVersion|Assembly Version|BuildDate)\\b",
             Pattern.CASE_INSENSITIVE);
 
+    public Map<String, Object> getFilteredArtifacts(PEArtifacts filter) {
+        Map<String, Object> response = new LinkedHashMap<>();
+
+        // Get the requested section data
+        Map<String, Set<String>> sectionData = sectionArtifacts.getOrDefault(
+                filter.getSection(),
+                Collections.emptyMap()
+        );
+
+        // Apply filters
+        Map<String, List<String>> filteredResults = new LinkedHashMap<>();
+        int totalItems = 0;
+
+        if (filter.getArtifactTypes() == null || filter.getArtifactTypes().isEmpty()) {
+            // Return all artifact types if none specified
+            for (Map.Entry<String, Set<String>> entry : sectionData.entrySet()) {
+                List<String> items = applySearchFilter(new ArrayList<>(entry.getValue()), filter.getSearchTerm());
+                filteredResults.put(entry.getKey(), items);
+                totalItems += items.size();
+            }
+        } else {
+            // Return only requested artifact types
+            for (String type : filter.getArtifactTypes()) {
+                if (sectionData.containsKey(type)) {
+                    List<String> items = applySearchFilter(
+                            new ArrayList<>(sectionData.get(type)),
+                            filter.getSearchTerm()
+                    );
+                    filteredResults.put(type, items);
+                    totalItems += items.size();
+                }
+            }
+        }
+
+        // Apply pagination
+        Map<String, List<String>> paginatedResults = new LinkedHashMap<>();
+        int itemsProcessed = 0;
+        int itemsRemaining = filter.getLimit();
+        int skipItems = (filter.getPage() - 1) * filter.getLimit();
+
+        for (Map.Entry<String, List<String>> entry : filteredResults.entrySet()) {
+            List<String> allItems = entry.getValue();
+            List<String> paginatedItems = new ArrayList<>();
+
+            // Skip items from previous pages
+            if (skipItems > 0) {
+                int skip = Math.min(skipItems, allItems.size());
+                allItems = allItems.subList(skip, allItems.size());
+                skipItems -= skip;
+                continue;
+            }
+
+            // Take items for current page
+            if (itemsRemaining > 0 && !allItems.isEmpty()) {
+                int take = Math.min(itemsRemaining, allItems.size());
+                paginatedItems = allItems.subList(0, take);
+                itemsRemaining -= take;
+                itemsProcessed += take;
+            }
+
+            paginatedResults.put(entry.getKey(), paginatedItems);
+        }
+
+        // Calculate total pages
+        int totalPages = (int) Math.ceil((double) totalItems / filter.getLimit());
+
+        // Build response
+        response.put("page", filter.getPage());
+        response.put("limit", filter.getLimit());
+        response.put("totalItems", totalItems);
+        response.put("totalPages", totalPages);
+        response.put("artifacts", paginatedResults);
+        response.put("section", filter.getSection());
+
+        return response;
+    }
+
+    private List<String> applySearchFilter(List<String> items, String searchTerm) {
+        if (searchTerm == null || searchTerm.trim().isEmpty()) {
+            return items;
+        }
+
+        String lowerSearch = searchTerm.toLowerCase();
+        List<String> filtered = new ArrayList<>();
+
+        for (String item : items) {
+            if (item.toLowerCase().contains(lowerSearch)) {
+                filtered.add(item);
+            }
+        }
+
+        return filtered;
+    }
     public PEArtifactExtractor(byte[] fileBytes) throws IOException {
         this.fileBytes = fileBytes;
-        StringsExtractFromSection extractFromSection = new StringsExtractFromSection(fileBytes);
-        this.sectionStrings = extractFromSection.getSectionStrings();
+        ExtractStrings extract = new ExtractStrings(fileBytes);
+        this.sectionStrings = extract.getSectionStrings();
         this.sectionArtifacts = new LinkedHashMap<>();
         analyzeAllSections();
-        analyzeWholeFile();
+        analyzeWholeFile(extract);
     }
 
     private void analyzeAllSections() {
@@ -49,33 +144,88 @@ public class PEArtifactExtractor implements Serializable {
             String content = entry.getValue();
 
             Map<String, Set<String>> artifacts = new LinkedHashMap<>();
-            artifacts.put("urls", extractUrls(content));
-            artifacts.put("filePaths", extractFilePaths(content));
-            artifacts.put("ipAddresses", extractIpAddresses(content));
-            artifacts.put("emailAddresses", extractEmailAddresses(content));
-            artifacts.put("registryKeys", extractRegistryKeys(content));
-            artifacts.put("domains", extractDomains(content));
-            artifacts.put("apiCalls", extractApiCalls(content));
-            artifacts.put("metadata", extractMetadata(content));
-            artifacts.put("interestingStrings", findInterestingStrings(content));
-
+            Set<String > temp = new LinkedHashSet<>();
+            temp = extractUrls(content);
+            if (!temp.isEmpty()) {
+                artifacts.put("urls", temp);
+            }
+            temp = extractFilePaths(content);
+            if (!temp.isEmpty()) {
+                artifacts.put("filePaths", temp);
+            }
+            temp =extractIpAddresses(content);
+            if (!temp.isEmpty()) {
+                artifacts.put("ipAddresses", temp);
+            }
+            temp=extractEmailAddresses(content);
+            if (!temp.isEmpty()) {
+                artifacts.put("emailAddresses", temp);
+            }
+            temp = extractRegistryKeys(content);
+            if (!temp.isEmpty()) {
+                artifacts.put("registryKeys", temp);
+            }
+            temp = extractDomains(content);
+            if (!temp.isEmpty()) {
+                artifacts.put("domains", temp);
+            }
+            temp = extractApiCalls(content);
+            if (!temp.isEmpty()) {
+                artifacts.put("apiCalls", temp);
+            }
+            temp = extractMetadata(content);
+            if (!temp.isEmpty()) {
+                artifacts.put("metadata", temp);
+            }
+            temp =findInterestingStrings(content);
+            if (!temp.isEmpty()) {
+                artifacts.put("interestingStrings", temp);
+            }
             sectionArtifacts.put(sectionName, artifacts);
         }
     }
 
-    private void analyzeWholeFile(){
-        String content = extractAllStrings();
+    private void analyzeWholeFile(ExtractStrings extract){
+        String content = extract.extractAllStrings();
 
         Map<String, Set<String>> artifacts = new LinkedHashMap<>();
-        artifacts.put("urls", extractUrls(content));
-        artifacts.put("filePaths", extractFilePaths(content));
-        artifacts.put("ipAddresses", extractIpAddresses(content));
-        artifacts.put("emailAddresses", extractEmailAddresses(content));
-        artifacts.put("registryKeys", extractRegistryKeys(content));
-        artifacts.put("domains", extractDomains(content));
-        artifacts.put("apiCalls", extractApiCalls(content));
-        artifacts.put("metadata", extractMetadata(content));
-        artifacts.put("interestingStrings", findInterestingStrings(content));
+        Set<String > temp = new LinkedHashSet<>();
+        temp = extractUrls(content);
+        if (!temp.isEmpty()) {
+            artifacts.put("urls", temp);
+        }
+        temp = extractFilePaths(content);
+        if (!temp.isEmpty()) {
+            artifacts.put("filePaths", temp);
+        }
+        temp =extractIpAddresses(content);
+        if (!temp.isEmpty()) {
+            artifacts.put("ipAddresses", temp);
+        }
+        temp=extractEmailAddresses(content);
+        if (!temp.isEmpty()) {
+            artifacts.put("emailAddresses", temp);
+        }
+        temp = extractRegistryKeys(content);
+        if (!temp.isEmpty()) {
+            artifacts.put("registryKeys", temp);
+        }
+        temp = extractDomains(content);
+        if (!temp.isEmpty()) {
+            artifacts.put("domains", temp);
+        }
+        temp = extractApiCalls(content);
+        if (!temp.isEmpty()) {
+            artifacts.put("apiCalls", temp);
+        }
+        temp = extractMetadata(content);
+        if (!temp.isEmpty()) {
+            artifacts.put("metadata", temp);
+        }
+        temp =findInterestingStrings(content);
+        if (!temp.isEmpty()) {
+            artifacts.put("interestingStrings", temp);
+        }
 
         sectionArtifacts.put("all", artifacts);
 
@@ -99,22 +249,6 @@ public class PEArtifactExtractor implements Serializable {
         }
 
         return result;
-    }
-
-    public String extractAllStrings() {
-        StringBuilder sb = new StringBuilder();
-
-        // Try UTF-8 decoding first
-        String utf8Content = new String(fileBytes, StandardCharsets.UTF_8);
-        sb.append(utf8Content);
-
-        // Try UTF-16LE decoding (common in Windows executables)
-        String utf16Content = new String(fileBytes, StandardCharsets.UTF_16LE);
-        if (utf16Content.length() > 0) {
-            sb.append("\n").append(utf16Content);
-        }
-
-        return sb.toString();
     }
 
     // Individual artifact extraction methods
@@ -212,8 +346,6 @@ public class PEArtifactExtractor implements Serializable {
         }
         return interesting;
     }
-
-
 
     public void printArtifacts() {
         Map<String, List<Map<String, List<String>>>> artifacts = getStructuredArtifacts();

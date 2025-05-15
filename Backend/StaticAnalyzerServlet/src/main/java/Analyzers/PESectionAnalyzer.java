@@ -150,7 +150,7 @@ public class PESectionAnalyzer implements Serializable {
         }
 
         printSectionStatistics();
-        analyzePotentialPacking();
+
     }
 
     private boolean isExecutable(PESection section) {
@@ -177,31 +177,6 @@ public class PESectionAnalyzer implements Serializable {
                 sections.stream().filter(this::isWritable).count());
     }
 
-    private void analyzePotentialPacking() {
-        System.out.println("\nPacking Analysis:");
-        System.out.println("----------------------------------------");
-
-        // Check for high entropy in executable sections
-        sections.stream()
-                .filter(s -> isExecutable(s) && s.entropy > 6.5)
-                .forEach(s -> System.out.printf(
-                        "Warning: High entropy (%.2f) in %s - possible packing/encryption\n",
-                        s.entropy, s.name));
-
-        // Check for section name anomalies
-        sections.stream()
-                .filter(s -> s.name.contains("UPX") || s.name.contains("ASPack"))
-                .forEach(s -> System.out.printf(
-                        "Warning: Suspicious section name '%s' - possible packed executable\n",
-                        s.name));
-
-        // Check for size mismatches
-        sections.stream()
-                .filter(s -> s.virtualSize > 0 && s.rawSize == 0)
-                .forEach(s -> System.out.printf(
-                        "Warning: Virtual size (0x%X) but no raw data in %s - possible runtime allocation\n",
-                        s.virtualSize, s.name));
-    }
 
 
 

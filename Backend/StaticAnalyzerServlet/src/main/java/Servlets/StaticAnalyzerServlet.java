@@ -2,196 +2,237 @@ package Servlets;
 
 import Analyzers.*;
 import DAO.*;
+import Utilities.JsonCache;
+import Utilities.Utils;
 import Utilities.Version;
+import Utilities.AnalysisCache;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import Bean.*;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import javax.servlet.ServletException;
-import javax.servlet.annotation.MultipartConfig;
-import javax.servlet.annotation.WebServlet;
-import javax.servlet.http.HttpServlet;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.Part;
+import java.nio.file.*;
+import java.sql.SQLException;
+import java.util.*;
+import java.util.logging.Logger;
+import javax.servlet.*;
+import javax.servlet.annotation.*;
+import javax.servlet.http.*;
 
 @WebServlet("/analyze")
 @MultipartConfig(
-        fileSizeThreshold = 1024 * 1024 * 1, // 1 MB
-        maxFileSize = 1024 * 1024 * 80,
-        maxRequestSize = 1024 * 1024 * 100
+        fileSizeThreshold = 1024 * 1024 * 10,
+        maxFileSize = 1024 * 1024 * 180,
+        maxRequestSize = 1024 * 1024 * 180
 )
 public class StaticAnalyzerServlet extends HttpServlet {
-
     private static final ObjectMapper objectMapper = new ObjectMapper();
+    private static final String ANALYSIS_RESULTS_PATH = "C:\\Users\\yaswant-pt7919\\Malware Analysis\\Analysis Results";
+    private static final String ARTIFACTS_PATH = "C:\\Users\\yaswant-pt7919\\Malware Analysis\\Artifacts";
+    private static int fileId;
+    private final Logger logger = Logger.getLogger(StaticAnalyzerServlet.class.getName());
+    private int analyzerVersion = Version.getAnalyzerVersion();
 
-
-
-    protected void doPost(HttpServletRequest request, HttpServletResponse response)
-            throws ServletException, IOException {
-        System.out.println("doPost");
-
+    protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+        response.setContentType("application/json");
         PrintWriter out = response.getWriter();
+        FileInfoDao fileInfoDao = new FileInfoDao();
 
         try {
-            Part filePart = request.getPart("exeFile");
-            String fileName = filePart.getSubmittedFileName();
-            System.out.println(filePart.toString());
-            if (fileName == null || fileName.isEmpty()) {
-                sendError(response, out, "No file uploaded", HttpServletResponse.SC_BAD_REQUEST);
-                return;
-            }
+            if (request.getContentType().contains("application/json")) {
+                JsonNode jsonNode = objectMapper.readTree(request.getReader());
+                String sha1 = jsonNode.has("sha1") ? jsonNode.get("sha1").asText() : null;
+                int version = jsonNode.has("version") ? jsonNode.get("version").asInt() :analyzerVersion;
 
-            if (!fileName.toLowerCase().endsWith(".exe") && !fileName.toLowerCase().endsWith(".dll")) {
-                sendError(response, out, "Only EXE/DLL files are supported", HttpServletResponse.SC_BAD_REQUEST);
-                return;
-            }
-
-            // Read file content
-            byte[] fileBytes = filePart.getInputStream().readAllBytes();
-            // Perform all analyses
-            Map<String, Object> analysisResults = new LinkedHashMap<>();
-            analysisResults.put("filename", fileName);
-
-            // General File Analysis
-            PEFileAnalyzer fileAnalyzer = new PEFileAnalyzer(fileBytes,fileName);
-            PEFileInfo peFileInfo = fileAnalyzer.getPEFileInfo();
-            FileInfoDao fileInfoDao = new FileInfoDao();
-            peFileInfo.setFileName(fileName);
-            //checking the file is Already analyzed
-            boolean shouldInsert = false;
-            if(fileInfoDao.isSha1Present(peFileInfo.getSha1Hash())){
-                if(Version.getAnalyzerVersion()!=fileInfoDao.getAnalyzerVersion(peFileInfo.getSha1Hash())){
-                    shouldInsert = true;
+                if (sha1 == null || sha1.isEmpty()) {
+                    sendError(response, out, "Invalid SHA1 hash", HttpServletResponse.SC_BAD_REQUEST);
+                    return;
                 }
-            }
-            else {
-                shouldInsert = true;
-            }
 
+                // Check cache first
 
-            if(shouldInsert){
-                analysisResults.put("analyzerVersion", Version.getAnalyzerVersion());
-                analysisResults.put("pe_fileinfo", peFileInfo);
-                int file_id = fileInfoDao.insertFile(peFileInfo);
+                if (AnalysisCache.contains(sha1+'v'+version) ) {
+                        objectMapper.writeValue(out, AnalysisCache.get(sha1+'v'+version));
+                        logger.info("Serving from LRI cache for SHA1: " + sha1);
+                        return;
+                }
 
-                // Static PE File Analysis
-                PEInfoParser peInfoParser = new PEInfoParser();
-                PEStaticInfo peStaticInfo = peInfoParser.getPEInfo(fileBytes);
-                analysisResults.put("static_info",peStaticInfo);
-                PEStaticInfoDao peStaticInfoDao = new PEStaticInfoDao();
-                peStaticInfoDao.insertPEStaticInfo(file_id,peStaticInfo);
-
-                //Directory Analysis
-                PEDataDirectoryAnalyzer dataDirectoryAnalyzer = new PEDataDirectoryAnalyzer(fileBytes);
-                List<DataDirectory> dataDirectories = dataDirectoryAnalyzer.getDirectories();
-                analysisResults.put("data_directories",dataDirectories);
-                DataDirectoriesDao dataDirectoriesDao = new DataDirectoriesDao();
-                dataDirectoriesDao.insertDataDirectories(file_id,dataDirectories);
-
-                //  Import/Export Analysis
-                PEImportsParser peImportsParser = new PEImportsParser();
-                analysisResults.put("imports", peImportsParser.parse(fileBytes));
-
-                PEExportsParser peExportsParser = new PEExportsParser();
-                analysisResults.put("exports",peExportsParser.parse(fileBytes));
-
-                //  Section Analysis
-                PESectionAnalyzer sectionInfo = new PESectionAnalyzer(fileBytes);
-                List<PESection> sections = sectionInfo.getSections();
-                analysisResults.put("sections", sections);
-                PESectionDao peSectionDao = new PESectionDao();
-                peSectionDao.insertSections(file_id,sections);
-
-                //  Resource Analysis
-                PEResourceAnalyzer resourceInfo =new PEResourceAnalyzer(fileBytes);
-                analysisResults.put("resources", resourceInfo.getResources());
-                resourceInfo.printResourceAnalysis();
-
-                //Authenticode Signature Analysis
-                PEAuthenticodeVerifier authenticodeVerifier = new PEAuthenticodeVerifier();
-                authenticodeVerifier.analyze(fileBytes);
-                PEAuthenticodeInfo peAuthenticodeInfo = authenticodeVerifier.getPeAuthenticodeInfo();
-                analysisResults.put("authenticode_info", peAuthenticodeInfo);
-                AuthenticodeInfoDao authenticodeInfoDao = new AuthenticodeInfoDao();
-                authenticodeInfoDao.insertAuthenticodeInfo(file_id,peAuthenticodeInfo);
-
-                //  Artifact Extraction
-                PEArtifactExtractor artifacts = new PEArtifactExtractor(fileBytes);
-                analysisResults.put("artifacts",artifacts.getStructuredArtifacts());
-
-//                analysisResults.put("artifacts1", artifacts.getArtifacts());
-//                PEArtifactExtractor artifacts2 = new PEArtifactExtractor(fileBytes,3);
-//                analysisResults.put("artifacts2", artifacts2.getArtifacts());
-//                PEArtifactExtractor artifacts3 = new PEArtifactExtractor(fileBytes,1);
-//                analysisResults.put("artifacts3", artifacts3.getArtifacts());
-                // Convert to JSON and send response
-                String jsonResponse = objectMapper.writerWithDefaultPrettyPrinter()
-                        .writeValueAsString(analysisResults);
-                out.println(jsonResponse);
-                System.out.println("Displaying through AnalysisResults");
-                String allStrings = artifacts.extractAllStrings();
-                analysisResults.put("extractedStrings", allStrings);
-                jsonResponse = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(analysisResults);
-                String folderPath = "C:\\Users\\yaswant-pt7919\\Malware Analysis\\Analysis Results";
-                // Save to specific folder
-                saveAsJsonFile(folderPath, analysisResults, fileName+".json");
-                fileInfoDao.updateJsonFilePath(file_id,folderPath+"/"+fileName+".json");
-
-            }
-            else {
-                String filePath = fileInfoDao.getJsonFilePath(peFileInfo.getSha1Hash());
+                //Check sha1 in db
+                if (!fileInfoDao.isSha1Present(sha1,version)) {
+                    logger.info("No Sha found in DB");
+                    sendError(response, out, "No analysis found for the provided SHA1 hash", HttpServletResponse.SC_NOT_FOUND);
+                    return;
+                }
+                //Get the Analysis Report File Path from db
+                String filePath = fileInfoDao.getJsonFilePath(sha1,version);
                 if (filePath == null || filePath.isEmpty()) {
-                    throw new IOException("File path is null or empty");
+                    sendError(response, out, "Analysis data not found", HttpServletResponse.SC_NOT_FOUND);
+                    return;
                 }
 
-                try (FileInputStream fis = new FileInputStream(filePath)) {
-                    String jsonResponse = new String(fis.readAllBytes(), StandardCharsets.UTF_8);
+                String jsonContent = new String(Files.readAllBytes(Paths.get(filePath)), StandardCharsets.UTF_8);
+                JsonNode resultNode = objectMapper.readTree(jsonContent);
+
+                // Add to cache
+                AnalysisCache.put(sha1+'v'+resultNode.get("analyzerVersion"), resultNode);
+                logger.info("Serving from DB for SHA1: " + sha1);
+
+                out.println(jsonContent);
+            } else {
+                Part filePart = request.getPart("exeFile");
+                if (filePart == null) {
+                    sendError(response, out, "No file uploaded", HttpServletResponse.SC_BAD_REQUEST);
+                    return;
+                }
+
+                Path tempFile = Files.createTempFile("upload-", ".tmp");
+                try {
+                    try (InputStream input = filePart.getInputStream();
+                         OutputStream output = Files.newOutputStream(tempFile)) {
+                        input.transferTo(output);
+                    }
+
+                    byte[] fileBytes = Files.readAllBytes(tempFile);
+                    String fileName = filePart.getSubmittedFileName();
+                    String sha1Hash = Utils.calculateHash(fileBytes, "SHA1");
+
+                    // Check cache for existing analysis
+                    if (AnalysisCache.contains(sha1Hash+'v'+analyzerVersion) ) {
+                        objectMapper.writeValue(out, AnalysisCache.get(sha1Hash+'v'+analyzerVersion));
+                        logger.info("Serving from LRI cache for SHA1: " + sha1Hash);
+                        return;
+                    }
+
+                    // Check sha1 in db
+                    if (fileInfoDao.isSha1Present(sha1Hash,analyzerVersion) ) {
+
+                        String existingPath = fileInfoDao.getJsonFilePath(sha1Hash,analyzerVersion);
+                        String jsonContent = new String(Files.readAllBytes(Paths.get(existingPath)), StandardCharsets.UTF_8);
+                        JsonNode resultNode = objectMapper.readTree(jsonContent);
+
+                        // Add to cache
+                        AnalysisCache.put(sha1Hash+'v'+resultNode.get("analyzerVersion"), resultNode);
+                        logger.info("Serving from DB for SHA1: " + sha1Hash);
+                        out.println(jsonContent);
+                        return;
+                    }
+
+                    // Perform analysis
+                    Map<String, Object> analysisResults = performAnalysis(fileBytes, fileName, fileInfoDao);
+                    String jsonResponse = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(analysisResults);
+                    JsonNode resultNode = objectMapper.readTree(jsonResponse);
+
+                    // Add to cache
+                    AnalysisCache.put(sha1Hash+'v'+Version.getAnalyzerVersion(), resultNode);
+
+                    // Save results to filesystem
+                    saveResults(analysisResults, fileName ,fileBytes, fileInfoDao,sha1Hash);
+
                     out.println(jsonResponse);
-                    System.out.println("Displaying through file path");
-                } catch (IOException e) {
-                    System.err.println("Error reading JSON file: " + e.getMessage());
-                    throw e; // Re-throw or handle appropriately
+                } catch (Exception ex) {
+                    throw new RuntimeException(ex);
+                }
+                finally {
+                    filePart.delete();
+                    Files.deleteIfExists(tempFile);
                 }
             }
         } catch (Exception e) {
-            sendError(response, out, "Analysis failed: " + e.getMessage(),
-                    HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            sendError(response, out, "Analysis failed: " + e.getMessage(), HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            e.printStackTrace();
+
         }
     }
-    public static void saveAsJsonFile(String folderPath , Object data, String filename) throws IOException {
 
-        Path directory = Paths.get(folderPath);
 
-        // Create directory if it doesn't exist
-        if (!Files.exists(directory)) {
-            Files.createDirectories(directory);
-        }
+    private Map<String, Object> performAnalysis(byte[] fileBytes, String fileName,
+                                                 FileInfoDao fileInfoDao) throws Exception {
+        Map<String, Object> results = new LinkedHashMap<>();
+        results.put("filename", fileName);
+        results.put("analyzerVersion", Version.getAnalyzerVersion());
 
-        Path filePath = directory.resolve(filename);
+        // General File analysis
+        PEFileAnalyzer fileAnalyzer = new PEFileAnalyzer(fileBytes, fileName);
+        PEFileInfo fileInfo = fileAnalyzer.getPEFileInfo();
+        this.fileId= fileInfoDao.insertFile(fileInfo);
+        results.put("pe_fileinfo", fileInfo);
 
-        // Convert object to pretty JSON string
-        String json = objectMapper.writerWithDefaultPrettyPrinter()
-                .writeValueAsString(data);
+        // PE Static Analysis
+        PEStaticInfo peStaticInfo = new PEInfoParser().getPEInfo(fileBytes);
+        results.put("static_info", peStaticInfo);
+        new PEStaticInfoDao().insertPEStaticInfo(fileId, peStaticInfo);
 
-        // Write to file
-        Files.write(filePath, json.getBytes());
+        // Data Directories
+        List<DataDirectory> dataDirectories = new PEDataDirectoryAnalyzer(fileBytes).getDirectories();
+        results.put("data_directories", dataDirectories);
+        new DataDirectoriesDao().insertDataDirectories(fileId, dataDirectories);
+
+        // Imports/Exports
+        results.put("imports", new PEImportsParser().parse(fileBytes));
+        results.put("exports", new PEExportsParser().parse(fileBytes));
+
+        // Sections
+        List<PESection> sections = new PESectionAnalyzer(fileBytes).getSections();
+        results.put("sections", sections);
+        new PESectionDao().insertSections(fileId, sections);
+
+        // Resources
+        results.put("resources", new PEResourceAnalyzer(fileBytes).getResources());
+
+        // Authenticode
+        PEAuthenticodeVerifier authenticodeVerifier = new PEAuthenticodeVerifier();
+        authenticodeVerifier.analyze(fileBytes);
+        results.put("authenticode_info", authenticodeVerifier.getPeAuthenticodeInfo());
+        new AuthenticodeInfoDao().insertAuthenticodeInfo(fileId, authenticodeVerifier.getPeAuthenticodeInfo());
+
+        return results;
     }
 
-    private void sendError(HttpServletResponse response, PrintWriter out,
-                           String message, int statusCode) {
+    private void saveResults(Map<String, Object> analysisResults,String fileName,
+                             byte[] fileBytes, FileInfoDao fileInfoDao, String sha1Hash) throws IOException, SQLException {
+        String baseName =fileName.replace(".exe", "");
+        int analyzerVersion = Version.getAnalyzerVersion();
+
+        // Save main analysis
+
+        //Create file if that file does not exist and save the results
+        Path analysisDir = Paths.get(ANALYSIS_RESULTS_PATH);
+        if (!Files.exists(analysisDir)) Files.createDirectories(analysisDir);
+        Path analysisFile = analysisDir.resolve(baseName + "_v" + analyzerVersion + ".json");
+        Files.write(analysisFile, objectMapper.writerWithDefaultPrettyPrinter()
+                .writeValueAsString(analysisResults).getBytes());
+
+        // Save artifacts
+        Map<String, Object> artifacts = new LinkedHashMap<>();
+        artifacts.put("analyzerVersion", analyzerVersion);
+        //All artifacts
+        PEArtifactExtractor artifactExtractor = new PEArtifactExtractor(fileBytes);
+        artifacts.put("artifacts", artifactExtractor.getStructuredArtifacts());
+        //All Extracted strings from exe file
+        ExtractStrings extractStrings = new ExtractStrings(fileBytes);
+        artifacts.put("extractedStrings", extractStrings.extractAllStrings());
+        String artifactsResponse = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(analysisResults);
+        JsonNode resultNode = objectMapper.readTree(artifactsResponse);
+
+        //Add to cache
+//        JsonCache.put(sha1Hash,resultNode);
+
+        //Save as File
+        Path artifactsDir = Paths.get(ARTIFACTS_PATH);
+        if (!Files.exists(artifactsDir)) Files.createDirectories(artifactsDir);
+        Path artifactsFile = artifactsDir.resolve(baseName + "_v" + analyzerVersion + "_Artifacts.json");
+        Files.write(artifactsFile, objectMapper.writerWithDefaultPrettyPrinter()
+                .writeValueAsString(artifacts).getBytes());
+
+        //Updating file paths to db
+        fileInfoDao.updatePaths(fileId, analysisFile.toString(), artifactsFile.toString());
+    }
+
+    private void sendError(HttpServletResponse response, PrintWriter out, String message, int statusCode) {
         response.setStatus(statusCode);
         try {
-            Map<String, String> error = new LinkedHashMap<>();
-            error.put("error", message);
-            out.println(objectMapper.writeValueAsString(error));
+            out.println(objectMapper.writeValueAsString(Map.of("error", message)));
         } catch (Exception e) {
             out.println("{\"error\": \"Failed to generate error message\"}");
         }

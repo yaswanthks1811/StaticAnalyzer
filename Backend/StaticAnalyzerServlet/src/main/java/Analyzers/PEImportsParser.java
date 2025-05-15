@@ -1,5 +1,8 @@
 package Analyzers;
 
+import Utilities.Utils;
+import jdk.jshell.execution.Util;
+
 import java.io.Serializable;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -51,31 +54,31 @@ public class PEImportsParser implements Serializable {
             throw new IllegalArgumentException("Not a valid PE file");
         }
 
-        int peHeaderOffset = readDword(fileBytes, 0x3C);
+        int peHeaderOffset = Utils.readDWord(fileBytes, 0x3C);
         if (peHeaderOffset <= 0 || peHeaderOffset + 248 >= fileBytes.length) {
             throw new IllegalArgumentException("Invalid PE header offset");
         }
 
         // Check PE signature
-        if (readDword(fileBytes, peHeaderOffset) != 0x00004550) {
+        if (Utils.readDWord(fileBytes, peHeaderOffset) != 0x00004550) {
             throw new IllegalArgumentException("Invalid PE signature");
         }
 
         // Optional Header
         int optionalHeaderOffset = peHeaderOffset + 24;
-        int magic = readWord(fileBytes, optionalHeaderOffset);
+        int magic = Utils.readWord(fileBytes, optionalHeaderOffset);
         boolean is64bit = (magic == 0x20B);
 
         // Get Import Table RVA and Size
-        int importTableRva = readDword(fileBytes, optionalHeaderOffset + (is64bit ? 120 : 104));
-        int importTableSize = readDword(fileBytes, optionalHeaderOffset + (is64bit ? 124 : 108));
+        int importTableRva = Utils.readDWord(fileBytes, optionalHeaderOffset + (is64bit ? 120 : 104));
+        int importTableSize = Utils.readDWord(fileBytes, optionalHeaderOffset + (is64bit ? 124 : 108));
 
         if (importTableRva == 0 || importTableSize == 0) {
             return importsInfo; // No imports
         }
 
         // Convert RVA to file offset
-        int importTableOffset = rvaToOffset(fileBytes, peHeaderOffset, importTableRva);
+        int importTableOffset = Utils.rvaToOffset(fileBytes, peHeaderOffset, importTableRva);
         if (importTableOffset == -1) {
             return importsInfo;
         }
@@ -89,21 +92,21 @@ public class PEImportsParser implements Serializable {
             if (offset + descriptorSize > fileBytes.length)
                 break;
 
-            int nameRva = readDword(fileBytes, offset + 12); // Name RVA
-            int originalFirstThunk = readDword(fileBytes, offset); // OriginalFirstThunk
-            int firstThunk = readDword(fileBytes, offset + 16); // FirstThunk
+            int nameRva = Utils.readDWord(fileBytes, offset + 12); // Name RVA
+            int originalFirstThunk = Utils.readDWord(fileBytes, offset); // OriginalFirstThunk
+            int firstThunk = Utils.readDWord(fileBytes, offset + 16); // FirstThunk
 
             if (nameRva == 0 && originalFirstThunk == 0 && firstThunk == 0)
                 break;
 
             // Get DLL name
-            int nameOffset = rvaToOffset(fileBytes, peHeaderOffset, nameRva);
+            int nameOffset = Utils.rvaToOffset(fileBytes, peHeaderOffset, nameRva);
             if (nameOffset == -1) {
                 offset += descriptorSize;
                 continue;
             }
 
-            String dllName = readNullTerminatedString(fileBytes, nameOffset);
+            String dllName = Utils.readNullTerminatedString(fileBytes, nameOffset);
             if (dllName.isEmpty()) {
                 offset += descriptorSize;
                 continue;
@@ -112,7 +115,7 @@ public class PEImportsParser implements Serializable {
             // Get the import address table (use OriginalFirstThunk if available, otherwise
             // FirstThunk)
             int thunkRva = (originalFirstThunk != 0) ? originalFirstThunk : firstThunk;
-            int thunkOffset = rvaToOffset(fileBytes, peHeaderOffset, thunkRva);
+            int thunkOffset = Utils.rvaToOffset(fileBytes, peHeaderOffset, thunkRva);
             if (thunkOffset == -1) {
                 offset += descriptorSize;
                 continue;
@@ -126,8 +129,8 @@ public class PEImportsParser implements Serializable {
                 if (thunkEntryOffset + thunkEntrySize > fileBytes.length)
                     break;
 
-                long thunkValue = is64bit ? readQword(fileBytes, thunkEntryOffset)
-                        : readDword(fileBytes, thunkEntryOffset);
+                long thunkValue = is64bit ? Utils.readQWord(fileBytes, thunkEntryOffset)
+                        : Utils.readDWord(fileBytes, thunkEntryOffset);
                 if (thunkValue == 0)
                     break; // End of list
 
@@ -139,10 +142,10 @@ public class PEImportsParser implements Serializable {
                 } else {
                     // Named import
                     int hintNameRva = (int) (thunkValue & 0xFFFFFFFFL);
-                    int hintNameOffset = rvaToOffset(fileBytes, peHeaderOffset, hintNameRva);
+                    int hintNameOffset = Utils.rvaToOffset(fileBytes, peHeaderOffset, hintNameRva);
                     if (hintNameOffset != -1) {
-                        int hint = readWord(fileBytes, hintNameOffset);
-                        String functionName = readNullTerminatedString(fileBytes, hintNameOffset + 2);
+                        int hint = Utils.readWord(fileBytes, hintNameOffset);
+                        String functionName = Utils.readNullTerminatedString(fileBytes, hintNameOffset + 2);
                         importsInfo.addImport(dllName, functionName);
                     }
                 }
@@ -154,61 +157,6 @@ public class PEImportsParser implements Serializable {
         }
 
         return importsInfo;
-    }
-
-    private int rvaToOffset(byte[] fileBytes, int peHeaderOffset, int rva) {
-        int numberOfSections = readWord(fileBytes, peHeaderOffset + 6);
-        int sizeOfOptionalHeader = readWord(fileBytes, peHeaderOffset + 20);
-        int sectionTableOffset = peHeaderOffset + 24 + sizeOfOptionalHeader;
-
-        for (int i = 0; i < numberOfSections; i++) {
-            int sectionOffset = sectionTableOffset + (i * 40);
-            if (sectionOffset + 40 > fileBytes.length)
-                break;
-
-            int virtualAddress = readDword(fileBytes, sectionOffset + 12);
-            int virtualSize = readDword(fileBytes, sectionOffset + 8);
-            int pointerToRawData = readDword(fileBytes, sectionOffset + 20);
-            int sizeOfRawData = readDword(fileBytes, sectionOffset + 16);
-
-            if (rva >= virtualAddress && rva < virtualAddress + virtualSize) {
-                if (sizeOfRawData == 0) {
-                    return rva;
-                }
-                return pointerToRawData + (rva - virtualAddress);
-            }
-        }
-        return -1;
-    }
-
-    private String readNullTerminatedString(byte[] bytes, int offset) {
-        StringBuilder sb = new StringBuilder();
-        while (offset < bytes.length && bytes[offset] != 0) {
-            sb.append((char) bytes[offset]);
-            offset++;
-        }
-        return sb.toString();
-    }
-
-    private static int readWord(byte[] bytes, int offset) {
-        if (offset < 0 || offset + 2 > bytes.length)
-            return 0;
-        return ByteBuffer.wrap(bytes, offset, 2)
-                .order(ByteOrder.LITTLE_ENDIAN).getShort() & 0xFFFF;
-    }
-
-    private static int readDword(byte[] bytes, int offset) {
-        if (offset < 0 || offset + 4 > bytes.length)
-            return 0;
-        return ByteBuffer.wrap(bytes, offset, 4)
-                .order(ByteOrder.LITTLE_ENDIAN).getInt();
-    }
-
-    private static long readQword(byte[] bytes, int offset) {
-        if (offset < 0 || offset + 8 > bytes.length)
-            return 0;
-        return ByteBuffer.wrap(bytes, offset, 8)
-                .order(ByteOrder.LITTLE_ENDIAN).getLong();
     }
 
 

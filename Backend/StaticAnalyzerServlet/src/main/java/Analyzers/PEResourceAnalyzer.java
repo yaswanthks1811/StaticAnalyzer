@@ -1,6 +1,7 @@
 package Analyzers;
 
 import Bean.ResourceEntry;
+import Utilities.Utils;
 
 import java.io.Serializable;
 import java.nio.ByteBuffer;
@@ -57,14 +58,14 @@ public class PEResourceAnalyzer implements Serializable {
             return;
         }
 
-        int peHeaderOffset = readDword(0x3C);
+        int peHeaderOffset = Utils.readDWord(fileBytes,0x3C);
         if (peHeaderOffset <= 0 || peHeaderOffset + 248 >= fileBytes.length) {
             System.err.println("Invalid PE header offset");
             return;
         }
 
         // Check PE signature
-        if (readDword(peHeaderOffset) != 0x00004550) {
+        if (Utils.readDWord(fileBytes,peHeaderOffset) != 0x00004550) {
             System.err.println("Invalid PE signature");
             return;
         }
@@ -75,8 +76,8 @@ public class PEResourceAnalyzer implements Serializable {
         // 3. Calculate data directory offset (32-bit: +96, 64-bit: +112)
         int dataDirOffset = peHeaderOffset + 24 + (is64Bit ? 112 : 96);
 
-        this.resourceSectionRva = readDword(dataDirOffset + (2 * 8));
-        this.resourceSectionSize = readDword(dataDirOffset + (2 * 8) + 4);
+        this.resourceSectionRva = Utils.readDWord(fileBytes,dataDirOffset + (2 * 8));
+        this.resourceSectionSize = Utils.readDWord(fileBytes,dataDirOffset + (2 * 8) + 4);
 
         if (resourceSectionRva == 0 || resourceSectionSize == 0) {
             System.err.println("No resource section found");
@@ -93,9 +94,9 @@ public class PEResourceAnalyzer implements Serializable {
     }
 
     private int findSectionOffset(int rva) {
-        int peHeaderOffset = readDword(0x3C);
-        int numSections = readWord(peHeaderOffset + 6);
-        int optionalHeaderSize = readWord(peHeaderOffset + 20);
+        int peHeaderOffset = Utils.readDWord(fileBytes,0x3C);
+        int numSections = Utils.readWord(fileBytes,peHeaderOffset + 6);
+        int optionalHeaderSize = Utils.readWord(fileBytes,peHeaderOffset + 20);
         int sectionTableOffset = peHeaderOffset + 24 + optionalHeaderSize;
 
         for (int i = 0; i < numSections; i++) {
@@ -105,10 +106,10 @@ public class PEResourceAnalyzer implements Serializable {
                 break;
             }
 
-            int virtualAddress = readDword(sectionOffset + 12);
-            int virtualSize = readDword(sectionOffset + 8);
-            int pointerToRawData = readDword(sectionOffset + 20);
-            int sizeOfRawData = readDword(sectionOffset + 16);
+            int virtualAddress = Utils.readDWord(fileBytes,sectionOffset + 12);
+            int virtualSize = Utils.readDWord(fileBytes,sectionOffset + 8);
+            int pointerToRawData = Utils.readDWord(fileBytes,sectionOffset + 20);
+            int sizeOfRawData = Utils.readDWord(fileBytes,sectionOffset + 16);
 
             if (rva >= virtualAddress && rva < virtualAddress + virtualSize) {
                 if (sizeOfRawData == 0) {
@@ -126,8 +127,8 @@ public class PEResourceAnalyzer implements Serializable {
             return;
         }
 
-        int numberOfNamedEntries = readWord(offset + 12);
-        int numberOfIdEntries = readWord(offset + 14);
+        int numberOfNamedEntries = Utils.readWord(fileBytes,offset + 12);
+        int numberOfIdEntries = Utils.readWord(fileBytes,offset + 14);
         int totalEntries = numberOfNamedEntries + numberOfIdEntries;
 
         int entryOffset = offset + 16;
@@ -137,8 +138,8 @@ public class PEResourceAnalyzer implements Serializable {
                 break;
             }
 
-            int nameId = readDword(entryOffset);
-            int dataOffset = readDword(entryOffset + 4);
+            int nameId = Utils.readDWord(fileBytes,entryOffset);
+            int dataOffset = Utils.readDWord(fileBytes,entryOffset + 4);
 
             if ((nameId & 0x80000000) != 0) {
                 int nameOffset = nameId & 0x7FFFFFFF;
@@ -164,8 +165,8 @@ public class PEResourceAnalyzer implements Serializable {
             }
 
             ResourceEntry entry = new ResourceEntry();
-            entry.rva = readDword(dataEntryOffset);
-            entry.size = readDword(dataEntryOffset + 4);
+            entry.rva = Utils.readDWord(fileBytes,dataEntryOffset);
+            entry.size = Utils.readDWord(fileBytes,dataEntryOffset + 4);
             entry.fileOffset = findSectionOffset(entry.rva);
 
             // Parse path to extract type and IDs
@@ -248,23 +249,6 @@ public class PEResourceAnalyzer implements Serializable {
         return RESOURCE_TYPES.getOrDefault(typeId, "UNKNOWN_" + typeId);
     }
 
-    private int readDword(int offset) {
-        if (offset < 0 || offset + 4 > fileBytes.length) {
-            System.err.println("Invalid DWORD read at offset: 0x" + Integer.toHexString(offset));
-            return 0;
-        }
-        return ByteBuffer.wrap(fileBytes, offset, 4)
-                .order(ByteOrder.LITTLE_ENDIAN).getInt();
-    }
-
-    private int readWord(int offset) {
-        if (offset < 0 || offset + 2 > fileBytes.length) {
-            System.err.println("Invalid WORD read at offset: 0x" + Integer.toHexString(offset));
-            return 0;
-        }
-        return ByteBuffer.wrap(fileBytes, offset, 2)
-                .order(ByteOrder.LITTLE_ENDIAN).getShort() & 0xFFFF;
-    }
 
     private String readUnicodeString(int offset) {
         if (offset < 0 || offset + 2 > fileBytes.length) {

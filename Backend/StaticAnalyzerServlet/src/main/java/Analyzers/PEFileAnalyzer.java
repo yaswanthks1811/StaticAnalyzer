@@ -1,13 +1,13 @@
 package Analyzers;
 
 import Bean.PEFileInfo;
+import Utilities.Utils;
 
 import java.io.IOException;
 import java.io.Serializable;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
-import static Analyzers.PEInfoParser.readWord;
 
 public class PEFileAnalyzer implements Serializable {
     PEFileInfo peFileInfo = new PEFileInfo();
@@ -27,21 +27,22 @@ public class PEFileAnalyzer implements Serializable {
         peFileInfo.setFileType(detectFileType());
         peFileInfo.setFileSize(fileBytes.length);
         peFileInfo.setEntropy(calculateEntropy());
-        peFileInfo.setMd5Hash(calculateHash("MD5"));
-        peFileInfo.setSha1Hash(calculateHash("SHA-1"));
-        peFileInfo.setSha256Hash(calculateHash("SHA-256"));
-        peFileInfo.setSha512Hash(calculateHash("SHA-512"));
+        peFileInfo.setMd5Hash(Utils.calculateHash(fileBytes,"MD5"));
+        peFileInfo.setSha1Hash(Utils.calculateHash(fileBytes,"SHA-1"));
+        peFileInfo.setSha256Hash(Utils.calculateHash(fileBytes,"SHA-256"));
+        peFileInfo.setSha512Hash(Utils.calculateHash(fileBytes,"SHA-512"));
         peFileInfo.setContentPreview(generateContentPreview());
+        peFileInfo.setFileName(fileName);
     }
 
     private String detectFileType() {
         if (fileBytes.length > 0x40 &&
                 fileBytes[0] == 0x4D && fileBytes[1] == 0x5A) { // MZ header
 
-            int peOffset = readDWord(0x3C);
+            int peOffset = Utils.readDWord(fileBytes,0x3C);
             if (peOffset + 4 < fileBytes.length &&
                     fileBytes[peOffset] == 0x50 && fileBytes[peOffset + 1] == 0x45) { // PE header
-                int magic = readWord(fileBytes, peOffset + 24);
+                int magic = Utils.readWord(fileBytes, peOffset + 24);
 
                 // Validate magic number
                 if (magic != 0x10B && magic != 0x20B) {
@@ -82,25 +83,6 @@ public class PEFileAnalyzer implements Serializable {
         return entropy;
     }
 
-    private String calculateHash(String algorithm) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance(algorithm);
-            byte[] hashBytes = digest.digest(fileBytes);
-            return bytesToHex(hashBytes); // Using custom method
-        } catch (NoSuchAlgorithmException e) {
-            return "Algorithm " + algorithm + " not available";
-        }
-    }
-
-    // Custom hex conversion method for Java 8+
-    static String bytesToHex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder(bytes.length * 2);
-        for (byte b : bytes) {
-            sb.append(String.format("%02x", b));
-        }
-        return sb.toString();
-    }
-
     private String generateContentPreview() {
         StringBuilder preview = new StringBuilder();
         int previewLength = Math.min(128, fileBytes.length);
@@ -115,14 +97,6 @@ public class PEFileAnalyzer implements Serializable {
         return preview.toString();
     }
 
-    private int readDWord(int offset) {
-        if (offset + 4 > fileBytes.length)
-            return 0;
-        return Byte.toUnsignedInt(fileBytes[offset]) |
-                (Byte.toUnsignedInt(fileBytes[offset + 1]) << 8) |
-                (Byte.toUnsignedInt(fileBytes[offset + 2]) << 16) |
-                (Byte.toUnsignedInt(fileBytes[offset + 3]) << 24);
-    }
 
 
     public long getFileSize() {

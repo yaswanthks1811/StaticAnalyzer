@@ -1,12 +1,7 @@
 package Analyzers;
 
 import Bean.PEStaticInfo;
-import java.io.Serializable;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import Utilities.Utils;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.text.SimpleDateFormat;
@@ -14,7 +9,6 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.TimeZone;
-import java.util.zip.CRC32;
 
 public class PEInfoParser {
     private static final Map<Integer, String> DLL_CHARACTERISTICS =
@@ -82,23 +76,23 @@ public class PEInfoParser {
             throw new IllegalArgumentException("Not a valid PE file (missing MZ header)");
         }
 
-        int peHeaderOffset = readDword(fileBytes, 0x3C);
+        int peHeaderOffset = Utils.readDWord(fileBytes, 0x3C);
         if (peHeaderOffset <= 0 || peHeaderOffset + 248 >= fileBytes.length) {
             throw new IllegalArgumentException("Invalid PE header offset");
         }
 
         // Check PE signature
-        if (readDword(fileBytes, peHeaderOffset) != 0x00004550) {  // "PE\0\0"
+        if (Utils.readDWord(fileBytes, peHeaderOffset) != 0x00004550) {  // "PE\0\0"
             throw new IllegalArgumentException("Invalid PE signature");
         }
 
         // COFF Header
-        int timeDateStamp = readDword(fileBytes, peHeaderOffset + 8);
-        int characteristics = readWord(fileBytes, peHeaderOffset + 22);
+        int timeDateStamp = Utils.readDWord(fileBytes, peHeaderOffset + 8);
+        int characteristics = Utils.readWord(fileBytes, peHeaderOffset + 22);
 
         // Optional Header
         int optionalHeaderOffset = peHeaderOffset + 24;
-        int magic = readWord(fileBytes, optionalHeaderOffset);
+        int magic = Utils.readWord(fileBytes, optionalHeaderOffset);
 
         // Validate magic number
         if (magic != 0x10B && magic != 0x20B) {
@@ -109,39 +103,39 @@ public class PEInfoParser {
         boolean is64bit = (magic == 0x20B);
 
         // Set basic info
-        info.setEntryPoint(readDword(fileBytes, optionalHeaderOffset + 16));
+        info.setEntryPoint(Utils.readDWord(fileBytes, optionalHeaderOffset + 16));
         info.setEntryPointSection(findSectionByRva(fileBytes,
                 peHeaderOffset, (int) info.getEntryPoint()));
-        info.setImageBase(is64bit ? readQword(fileBytes,
+        info.setImageBase(is64bit ? Utils.readQWord(fileBytes,
                 optionalHeaderOffset + 24)
-                : readDword(fileBytes, optionalHeaderOffset + 24));
-        info.setDigitallySigned(readDword(fileBytes,
+                : Utils.readDWord(fileBytes, optionalHeaderOffset + 24));
+        info.setDigitallySigned(Utils.readDWord(fileBytes,
                 optionalHeaderOffset + (is64bit ? 144 : 128)) != 0);
 
         // Set versions
         //PE32 has extra row baseOfData(so adding 4 to all the PE32 files)
-        info.setOsVersionMajor(readWord(fileBytes,
+        info.setOsVersionMajor(Utils.readWord(fileBytes,
                 optionalHeaderOffset + 40));
-        info.setOsVersionMinor(readWord(fileBytes,
+        info.setOsVersionMinor(Utils.readWord(fileBytes,
                 optionalHeaderOffset + 42));
-        info.setFileVersionMajor(readWord(fileBytes,
+        info.setFileVersionMajor(Utils.readWord(fileBytes,
                 optionalHeaderOffset + 44));
-        info.setFileVersionMinor(readWord(fileBytes,
+        info.setFileVersionMinor(Utils.readWord(fileBytes,
                 optionalHeaderOffset + 46));
-        info.setSubsystemVersionMajor(readWord(fileBytes,
+        info.setSubsystemVersionMajor(Utils.readWord(fileBytes,
                 optionalHeaderOffset + 48));
-        info.setSubsystemVersionMinor(readWord(fileBytes,
+        info.setSubsystemVersionMinor(Utils.readWord(fileBytes,
                 optionalHeaderOffset + 50));
 
         // Set characteristics
-        int subsystemValue = readWord(fileBytes, optionalHeaderOffset
+        int subsystemValue = Utils.readWord(fileBytes, optionalHeaderOffset
                 + 68);
         info.setSubsystem(SUBSYSTEMS.getOrDefault(subsystemValue,
                 "UNKNOWN (0x" + Integer.toHexString(subsystemValue) + ")"));
         info.setImageFileCharacteristics(getCharacteristics(FILE_CHARACTERISTICS,
                 characteristics));
         info.setDllCharacteristics(getCharacteristics(DLL_CHARACTERISTICS,
-                readWord(fileBytes, optionalHeaderOffset + 70)));
+                Utils.readWord(fileBytes, optionalHeaderOffset + 70)));
         System.out.println(optionalHeaderOffset+70);
 
         // Set timestamp with formatted date
@@ -154,10 +148,10 @@ public class PEInfoParser {
 
         // Set other fields
         info.setTlsCallbacks(
-                readDword(fileBytes, optionalHeaderOffset + (is64bit ?
+                Utils.readDWord(fileBytes, optionalHeaderOffset + (is64bit ?
                         184 : 172)) != 0 ? "Present" : "None");
         info.setClrVersion(
-                readDword(fileBytes, optionalHeaderOffset + (is64bit ?
+                Utils.readDWord(fileBytes, optionalHeaderOffset + (is64bit ?
                         224 : 212)) != 0 ? "Present" : "None");
         int richOffset = findRichHeaderOffset(fileBytes,peHeaderOffset);
         info.setRichHeaderOffset(richOffset);
@@ -171,8 +165,8 @@ public class PEInfoParser {
 
     private String findSectionByRva(byte[] fileBytes, int
             peHeaderOffset, int rva) {
-        int numberOfSections = readWord(fileBytes, peHeaderOffset + 6);
-        int sizeOfOptionalHeader = readWord(fileBytes, peHeaderOffset + 20);
+        int numberOfSections = Utils.readWord(fileBytes, peHeaderOffset + 6);
+        int sizeOfOptionalHeader = Utils.readWord(fileBytes, peHeaderOffset + 20);
         int sectionTableOffset = peHeaderOffset + 24 + sizeOfOptionalHeader;
 
         for (int i = 0; i < numberOfSections; i++) {
@@ -180,9 +174,9 @@ public class PEInfoParser {
             if (sectionOffset + 40 > fileBytes.length)
                 break;
 
-            int virtualAddress = readDword(fileBytes, sectionOffset + 12);
-            int virtualSize = readDword(fileBytes, sectionOffset + 8);
-            int pointerToRawData = readDword(fileBytes, sectionOffset + 20);
+            int virtualAddress = Utils.readDWord(fileBytes, sectionOffset + 12);
+            int virtualSize = Utils.readDWord(fileBytes, sectionOffset + 8);
+            int pointerToRawData = Utils.readDWord(fileBytes, sectionOffset + 20);
 
             if (rva >= virtualAddress && rva < virtualAddress + virtualSize) {
                 StringBuilder name = new StringBuilder();
@@ -213,9 +207,9 @@ public class PEInfoParser {
     private String calculateImportHash(byte[] fileBytes, int
                                                peHeaderOffset, int optionalHeaderOffset,
                                        boolean is64bit) {
-        int importTableRva = readDword(fileBytes, optionalHeaderOffset
+        int importTableRva = Utils.readDWord(fileBytes, optionalHeaderOffset
                 + (is64bit ? 120 : 104));
-        int importTableSize = readDword(fileBytes,
+        int importTableSize = Utils.readDWord(fileBytes,
                 optionalHeaderOffset + (is64bit ? 124 : 108));
 
         if (importTableRva == 0 || importTableSize == 0) {
@@ -233,7 +227,7 @@ public class PEInfoParser {
             int offset = importTableOffset;
 
             while (true) {
-                int nameRva = readDword(fileBytes, offset + 12);
+                int nameRva = Utils.readDWord(fileBytes, offset + 12);
                 if (nameRva == 0) break;
 
                 int nameOffset = rvaToOffset(fileBytes, peHeaderOffset, nameRva);
@@ -268,8 +262,8 @@ public class PEInfoParser {
     }
 
     private int rvaToOffset(byte[] fileBytes, int peHeaderOffset, int rva) {
-        int numberOfSections = readWord(fileBytes, peHeaderOffset + 6);
-        int sizeOfOptionalHeader = readWord(fileBytes, peHeaderOffset + 20);
+        int numberOfSections = Utils.readWord(fileBytes, peHeaderOffset + 6);
+        int sizeOfOptionalHeader = Utils.readWord(fileBytes, peHeaderOffset + 20);
         int sectionTableOffset = peHeaderOffset + 24 + sizeOfOptionalHeader;
 
         for (int i = 0; i < numberOfSections; i++) {
@@ -277,10 +271,10 @@ public class PEInfoParser {
             if (sectionOffset + 40 > fileBytes.length)
                 break;
 
-            int virtualAddress = readDword(fileBytes, sectionOffset + 12);
-            int virtualSize = readDword(fileBytes, sectionOffset + 8);
-            int pointerToRawData = readDword(fileBytes, sectionOffset + 20);
-            int sizeOfRawData = readDword(fileBytes, sectionOffset + 16);
+            int virtualAddress = Utils.readDWord(fileBytes, sectionOffset + 12);
+            int virtualSize = Utils.readDWord(fileBytes, sectionOffset + 8);
+            int pointerToRawData = Utils.readDWord(fileBytes, sectionOffset + 20);
+            int sizeOfRawData = Utils.readDWord(fileBytes, sectionOffset + 16);
 
             if (rva >= virtualAddress && rva < virtualAddress + virtualSize) {
                 if (sizeOfRawData == 0) {
@@ -319,6 +313,11 @@ public class PEInfoParser {
                 xorKey[2] & 0xFF, xorKey[3] & 0xFF);
         // Read and decode Rich Header entries
         int entryOffset = richOffset - 16; // Start of Rich Header data
+        if (entryOffset < 0) {
+            System.err.println("Invalid Rich Header offset: too close to start of file.");
+            return "";
+        }
+
 
         while (true) {
             if (entryOffset + 8 > fileBytes.length) break;
@@ -346,26 +345,6 @@ public class PEInfoParser {
         return "";
     }
 
-    static int readWord(byte[] bytes, int offset) {
-        if (offset < 0 || offset + 2 > bytes.length)
-            return 0;
-        return ByteBuffer.wrap(bytes, offset, 2)
-                .order(ByteOrder.LITTLE_ENDIAN).getShort() & 0xFFFF;
-    }
-
-    private static int readDword(byte[] bytes, int offset) {
-        if (offset < 0 || offset + 4 > bytes.length)
-            return 0;
-        return ByteBuffer.wrap(bytes, offset, 4)
-                .order(ByteOrder.LITTLE_ENDIAN).getInt();
-    }
-
-    private static long readQword(byte[] bytes, int offset) {
-        if (offset < 0 || offset + 8 > bytes.length)
-            return 0;
-        return ByteBuffer.wrap(bytes, offset, 8)
-                .order(ByteOrder.LITTLE_ENDIAN).getLong();
-    }
-
+    
 
 }
