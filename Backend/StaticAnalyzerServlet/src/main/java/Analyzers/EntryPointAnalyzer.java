@@ -146,13 +146,5 @@ public class EntryPointAnalyzer implements Serializable {
         }
     }
 
-    public static void main(String[] args) {
-        try {
-            byte[] fileBytes = Files.readAllBytes(Paths.get("NingBoBankBuddy.exe"));
-            EntryPointAnalyzer analyzer = new EntryPointAnalyzer(fileBytes);
-            analyzer.printInstructions();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
+
 }
